@@ -16,7 +16,7 @@ def _add_common_inference_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", default=MODEL_NAME_DEFAULT, help="HF model id (default: %(default)s)")
     parser.add_argument("--device", default=None, help="e.g. cuda:0 or cpu (default: cuda if available, else cpu)")
     parser.add_argument("--num-steps", type=int, default=64, help="Recurrent steps passed directly to the model")
-    parser.add_argument("--max-new-tokens", type=int, default=128)
+    parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--limit", type=int, default=None, help="Only process the first N examples")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", required=True)
@@ -42,8 +42,19 @@ def build_parser() -> argparse.ArgumentParser:
             "indices:3,8,12|contains:substring|interesting:5 (default: %(default)s)"
         ),
     )
-    trajectory_parser.add_argument("--alignment", choices=["token", "prediction"], default="token")
+    trajectory_parser.add_argument("--alignment", choices=["token", "prediction"], default="prediction")
     trajectory_parser.add_argument("--interesting-top-k", type=int, default=5)
+    trajectory_parser.add_argument(
+        "--capture-mode",
+        choices=["generation", "teacher-forced"],
+        default="generation",
+        help=(
+            "generation: capture recurrent states during model.generate() itself, one "
+            "prediction-aligned trajectory per generated token, no second forward pass. "
+            "teacher-forced: run a separate forward pass over the full sequence, supporting "
+            "input tokens, arbitrary positions, and token alignment. (default: %(default)s)"
+        ),
+    )
     trajectory_parser.set_defaults(func=cmd_trajectory)
 
     metrics_parser = subparsers.add_parser("metrics", help="Compute trajectory metrics and classify saved tokens.")
@@ -76,13 +87,15 @@ def _run_config(args: argparse.Namespace, command: str) -> dict:
     }
 
 
-def _generate_example(adapter: HuginnAdapter, example: datasets.Example, args: argparse.Namespace):
+def _build_prompt_ids(adapter: HuginnAdapter, example: datasets.Example, args: argparse.Namespace) -> list[int]:
     user_text = datasets.build_prompt(example.question)
-    prompt_ids = adapter.build_prompt_ids(user_text, args.system_prompt)
-    result = adapter.generate(prompt_ids, num_steps=args.num_steps, max_new_tokens=args.max_new_tokens, seed=args.seed)
+    return adapter.build_prompt_ids(user_text, args.system_prompt)
+
+
+def _build_prediction_record(example: datasets.Example, result) -> dict:
     extracted = datasets.extract_answer(example.task, result.generated_text, example.options)
     correct = answers.check_correct(example.task, extracted, example.expected_answer)
-    record = {
+    return {
         "id": example.id,
         "question": example.question,
         "expected_answer": example.expected_answer,
@@ -92,7 +105,20 @@ def _generate_example(adapter: HuginnAdapter, example: datasets.Example, args: a
         "prompt_token_count": len(result.prompt_ids),
         "generated_token_count": len(result.generated_ids),
     }
-    return record, result
+
+
+def _generate_example(adapter: HuginnAdapter, example: datasets.Example, args: argparse.Namespace):
+    prompt_ids = _build_prompt_ids(adapter, example, args)
+    result = adapter.generate(prompt_ids, num_steps=args.num_steps, max_new_tokens=args.max_new_tokens, seed=args.seed)
+    return _build_prediction_record(example, result), result
+
+
+def _generate_example_with_trajectory(adapter: HuginnAdapter, example: datasets.Example, args: argparse.Namespace):
+    prompt_ids = _build_prompt_ids(adapter, example, args)
+    result, output_states = adapter.generate_with_trajectory(
+        prompt_ids, num_steps=args.num_steps, max_new_tokens=args.max_new_tokens, seed=args.seed
+    )
+    return _build_prediction_record(example, result), result, output_states
 
 
 def _tally(record: dict, counts: dict) -> None:
@@ -126,6 +152,22 @@ def _require_data_file(path: str) -> None:
         raise SystemExit(f"JSONL data file not found: {path}")
 
 
+def _validate_trajectory_args(args: argparse.Namespace) -> None:
+    if args.capture_mode != "generation":
+        return
+    if args.alignment == "token":
+        raise SystemExit(
+            "--alignment token is not supported with --capture-mode generation: generation-mode "
+            "trajectories are prediction-aligned by construction. Use --capture-mode teacher-forced "
+            "for token alignment."
+        )
+    if args.tokens == "input":
+        raise SystemExit(
+            "--tokens input is not supported with --capture-mode generation: it only captures "
+            "generated output tokens. Use --capture-mode teacher-forced to analyze prompt tokens."
+        )
+
+
 def cmd_generate(args: argparse.Namespace) -> None:
     _require_data_file(args.data)
     examples = datasets.load_examples(args.data, args.task, args.limit)
@@ -149,8 +191,33 @@ def cmd_generate(args: argparse.Namespace) -> None:
     storage.save_json(paths.summary_json, _build_summary(counts, args, adapter))
 
 
+def _capture_generation_mode(adapter: HuginnAdapter, example: datasets.Example, args: argparse.Namespace):
+    record, result, output_states = _generate_example_with_trajectory(adapter, example, args)
+    input_length = len(result.prompt_ids)
+    tokens = trajectories.build_generated_token_infos(
+        result.generated_ids, input_length, adapter.decode_token, adapter.special_token_ids()
+    )
+    selection = trajectories.select_and_slice_generated(output_states, tokens, args.tokens, args.interesting_top_k)
+    tokens_meta = trajectories.build_generation_tokens_metadata(tokens, selection, input_length)
+    sequence_length = input_length + len(result.generated_ids)
+    return record, result, selection, tokens_meta, sequence_length
+
+
+def _capture_teacher_forced_mode(adapter: HuginnAdapter, example: datasets.Example, args: argparse.Namespace):
+    record, result = _generate_example(adapter, example, args)
+    full_ids = result.prompt_ids + result.generated_ids
+    full_states = adapter.capture_trajectory(full_ids, args.num_steps)
+    tokens = trajectories.build_token_infos(
+        result.prompt_ids, result.generated_ids, adapter.decode_token, adapter.special_token_ids()
+    )
+    selection = trajectories.select_and_slice(full_states, tokens, args.tokens, args.alignment, args.interesting_top_k)
+    tokens_meta = trajectories.build_tokens_metadata(tokens, selection, args.alignment)
+    return record, result, selection, tokens_meta, len(full_ids)
+
+
 def cmd_trajectory(args: argparse.Namespace) -> None:
     _require_data_file(args.data)
+    _validate_trajectory_args(args)
     examples = datasets.load_examples(args.data, args.task, args.limit)
     paths = storage.make_run_paths(args.output_dir, with_trajectories=True)
 
@@ -159,6 +226,7 @@ def cmd_trajectory(args: argparse.Namespace) -> None:
         {
             "tokens_selector": args.tokens,
             "alignment": args.alignment,
+            "capture_mode": args.capture_mode,
             "interesting_top_k": args.interesting_top_k,
             "trajectory_convention": (
                 "states[0] is the initial recurrent state before any core-block application; "
@@ -177,18 +245,12 @@ def cmd_trajectory(args: argparse.Namespace) -> None:
     example_number = sum(1 for _ in storage.iter_trajectory_examples(paths))
 
     adapter = HuginnAdapter(args.model, args.device)
+    capture = _capture_generation_mode if args.capture_mode == "generation" else _capture_teacher_forced_mode
 
     for example in tqdm(examples, desc="trajectory"):
         if example.id in completed_ids:
             continue
-        record, result = _generate_example(adapter, example, args)
-
-        full_ids = result.prompt_ids + result.generated_ids
-        full_states = adapter.capture_trajectory(full_ids, args.num_steps)
-        tokens = trajectories.build_token_infos(
-            result.prompt_ids, result.generated_ids, adapter.decode_token, adapter.special_token_ids()
-        )
-        selection = trajectories.select_and_slice(full_states, tokens, args.tokens, args.alignment, args.interesting_top_k)
+        record, result, selection, tokens_meta, sequence_length = capture(adapter, example, args)
 
         example_number += 1
         storage.save_trajectory_npz(
@@ -196,10 +258,9 @@ def cmd_trajectory(args: argparse.Namespace) -> None:
             selection.selected_states,
             np.array(selection.selected_positions, dtype=np.int64),
             input_length=len(result.prompt_ids),
-            sequence_length=len(full_ids),
+            sequence_length=sequence_length,
             num_steps=args.num_steps,
         )
-        tokens_meta = trajectories.build_tokens_metadata(tokens, selection, args.alignment)
         tokens_meta["example_id"] = example.id
         storage.save_tokens_json(paths.tokens_path(example_number), tokens_meta)
 

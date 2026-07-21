@@ -53,13 +53,23 @@ huginn-research generate data/gsm8k.jsonl \
 
 ### `trajectory` -- run inference and capture recurrent latent trajectories
 
+`--capture-mode` selects how recurrent states are captured:
+
+- `generation` (default) -- states are captured *while* `model.generate()`
+  runs, with no second forward pass. Each generated token's trajectory is the
+  recurrent state at the causal position that predicted it, so this mode
+  supports generated output tokens only and is always prediction-aligned.
+- `teacher-forced` -- a separate forward pass runs over the full
+  prompt + generated sequence after generation completes. This is the only
+  mode that can analyze prompt tokens, arbitrary sequence positions, or use
+  `--alignment token`.
+
 ```bash
 huginn-research trajectory data/gsm8k.jsonl \
   --task numeric \
   --device cuda:0 \
   --num-steps 64 \
-  --tokens output \
-  --alignment token \
+  --tokens output:last \
   --output-dir outputs/gsm8k_trajectories
 ```
 
@@ -69,8 +79,18 @@ huginn-research trajectory data/ar_lsat.jsonl \
   --device cuda:0 \
   --num-steps 64 \
   --tokens interesting:5 \
-  --alignment prediction \
   --output-dir outputs/ar_lsat_trajectories
+```
+
+```bash
+huginn-research trajectory data/gsm8k.jsonl \
+  --task numeric \
+  --device cuda:0 \
+  --num-steps 64 \
+  --capture-mode teacher-forced \
+  --tokens input \
+  --alignment token \
+  --output-dir outputs/gsm8k_input_trajectories
 ```
 
 ### `metrics` -- compute trajectory metrics and classify tokens
@@ -96,13 +116,27 @@ Add `--no-plots` to skip figure generation.
 | `contains:substring` | positions whose decoded token contains `substring` |
 | `interesting:5` | top-5 positions by a cheap pre-scan for persistent late movement and periodicity (this score is never used as a classification metric) |
 
+With `--capture-mode generation`, only generated output tokens have captured
+trajectories, so `--tokens input` is rejected and any selector that resolves
+to a prompt position (e.g. `indices:` referencing one) fails with a clear
+error. Use `--capture-mode teacher-forced` to analyze prompt tokens.
+
 ## `token` vs `prediction` alignment
 
 - `token`: analyze the hidden state at the selected token's own position.
+  Only available with `--capture-mode teacher-forced`.
 - `prediction`: analyze the preceding causal position -- the one whose
   forward pass predicted the selected token. Position 0 has no predecessor;
-  it is clamped to itself and flagged (`alignment_clamped: true` in the
-  token metadata) rather than silently misaligned.
+  under `--capture-mode teacher-forced` it is clamped to itself and flagged
+  (`alignment_clamped: true` in the token metadata) rather than silently
+  misaligned. Under `--capture-mode generation` every trajectory is
+  prediction-aligned by construction (the generated token's own position
+  always has a predecessor, since it is never the first token in the
+  sequence), so this never happens.
+
+`--capture-mode generation` only supports prediction alignment, since it
+never captures the state at a token's own position -- only at the position
+that predicted it. `--alignment token` requires `--capture-mode teacher-forced`.
 
 ## Output structure
 
@@ -128,7 +162,26 @@ outputs/gsm8k_trajectories/
 `states` in each NPZ has shape `[num_steps + 1, num_selected_tokens,
 hidden_size]`: index 0 is the initial recurrent state (before any
 core-block application) and index `i >= 1` is the state after the i-th
-application of the recurrent core block.
+application of the recurrent core block. `run.json` and every `tokens/*.json`
+file record `capture_mode` alongside `alignment`.
+
+Each entry in `tokens/*.json` records, for `--capture-mode teacher-forced`:
+
+```text
+position, token_id, token_text, scope,
+aligned_position, aligned_token_id, aligned_token_text, alignment_clamped
+```
+
+and for `--capture-mode generation`:
+
+```text
+generation_index, position, predictor_position, token_id, token_text, scope
+```
+
+In both cases `position` is the analyzed token's absolute index in the full
+prompt + generated sequence, and the NPZ `states` columns correspond 1:1, in
+order, to the `tokens` list -- the `metrics` command reads both the same way
+regardless of which mode produced them.
 
 ## PCA is for visualization only
 

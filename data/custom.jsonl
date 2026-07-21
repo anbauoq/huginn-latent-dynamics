@@ -1,0 +1,19 @@
+{"question": "A light starts OFF, where OFF = 0 and ON = 1. It is toggled 17 times. What is its final state?", "final_answer": "1"}
+{"question": "A counter starts at 0 and increases by 1 repeatedly. What is the counter modulo 4 after 19 increases?", "final_answer": "3"}
+{"question": "A robot faces North. Use North = 0, East = 1, South = 2, and West = 3. It turns right 11 times. What is its final direction code?", "final_answer": "3"}
+{"question": "A token cycles through A -> B -> C -> A. Use A = 0, B = 1, and C = 2. Starting at A, what is its state code after 14 transitions?", "final_answer": "2"}
+{"question": "A game alternates turns between Alice and Bob, with Alice taking the first turn. Use Alice = 0 and Bob = 1. What is the player code for turn 18?", "final_answer": "1"}
+{"question": "Start with the number 2 and repeatedly apply the rule x -> x + 3. What is the result after 7 applications?", "final_answer": "23"}
+{"question": "Start with x = 1 and repeatedly apply the rule x -> 2*x + 1. What is x after 5 applications?", "final_answer": "63"}
+{"question": "A marker moves on a 5-position circle labeled 0, 1, 2, 3, and 4. It starts at 1 and moves two positions clockwise per step. Where is it after 8 steps?", "final_answer": "2"}
+{"question": "A machine repeats the cycle red -> green -> blue -> red. Use red = 0, green = 1, and blue = 2. It starts at red. What is its color code after 20 transitions?", "final_answer": "2"}
+{"question": "A bit starts at 1. On each step it flips: 1 becomes 0 and 0 becomes 1. What is the bit after 26 steps?", "final_answer": "1"}
+{"question": "A robot starts at position 0 on a number line. It repeats the two-step pattern: move +3, then move -1. What is its position after 12 individual moves?", "final_answer": "12"}
+{"question": "A pointer cycles clockwise through North, East, South, and West. Use North = 0, East = 1, South = 2, and West = 3. It starts at South. What is its direction code after 9 moves?", "final_answer": "3"}
+{"question": "There are three boxes A, B, and C. Use A = 0, B = 1, and C = 2. A ball moves A -> B, B -> C, and C -> A. Starting in B, what is the box code after 10 moves?", "final_answer": "2"}
+{"question": "A sequence starts at 4 and alternately adds 5 and subtracts 2, beginning with adding 5. What is the value after 9 operations?", "final_answer": "21"}
+{"question": "Use true = 1 and false = 0. The rules are: if an object is red, then it is warm; if it is warm, then it is active; if it is active, then it is visible; if it is visible, then it is detected. An object is red. What is the truth value of the statement that it is detected?", "final_answer": "1"}
+{"question": "Use true = 1 and false = 0. The rules are: if P is true, then Q is true; if Q is true, then R is true; if R is true, then S is true; if S is true, then T is true. P is true. What is the truth value of T?", "final_answer": "1"}
+{"question": "A lock has states 0, 1, 2, and 3. Each button press advances the state by 1 modulo 4. The lock starts in state 2. What state is it in after 15 presses?", "final_answer": "1"}
+{"question": "A variable starts at 1. Each NOT operation changes 1 to 0 and 0 to 1. The three-operation cycle NOT, NOT, NOT is repeated four times. What is the final value?", "final_answer": "1"}
+{"question": "A program uses the transitions A -> B, B -> D, D -> C, and C -> A. Use A = 0, B = 1, C = 2, and D = 3. Starting at A, what is the state code after 11 transitions?", "final_answer": "2"}
