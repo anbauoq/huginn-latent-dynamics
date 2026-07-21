@@ -12,8 +12,8 @@ Task = Literal["numeric", "multiple-choice"]
 DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant that solves problems carefully and precisely."
 
 ANSWER_TAG_INSTRUCTION = (
-    "Think through the problem, then give your final answer wrapped exactly "
-    "like this: <answer>...</answer>."
+    "Respond with only your final answer, wrapped exactly like this: "
+    "<answer>...</answer>. Do not show your reasoning."
 )
 
 
